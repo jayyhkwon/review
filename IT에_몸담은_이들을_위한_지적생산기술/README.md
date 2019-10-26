@@ -1,5 +1,5 @@
 
-<img src="/review/IT에_몸담은_이들을_위한_지적생산기술/표지.png"/>
+<img src="https://github.com/jayyhkwon/review/blob/master/IT%EC%97%90_%EB%AA%B8%EB%8B%B4%EC%9D%80_%EC%9D%B4%EB%93%A4%EC%9D%84_%EC%9C%84%ED%95%9C_%EC%A7%80%EC%A0%81%EC%83%9D%EC%82%B0%EA%B8%B0%EC%88%A0/%ED%91%9C%EC%A7%80.png"/>
 
 1장. 새로운 것을 배우려면?
 
