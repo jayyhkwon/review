@@ -182,3 +182,345 @@
         **AnswerCollection으로 클래스를 분리하는 것은 이해되나** 
         **AnswerCollection으로 분리한다고 해서 데이터 상태와 상관이 있나..?**
         **어차피 Profile 객체와 MatchSet은 같은 AnswerCollection을 공유하는데..**
+
+- #### 10장. 목 객체 사용
+
+  - 의존성이 강한 코드들을 테스트하기 위한 도구
+  
+  - 스텁 -> 목 객체 흐름으로 설명
+
+  - **테스트 대상 : AddressRetriever.retrieve() 메서드의 로직을 검증.**
+
+  -  AddressRetriever 클래스
+
+  ```java
+  package iloveyouboss;
+  
+  import java.io.*;
+  import org.json.simple.*;
+  import org.json.simple.parser.*;
+  import util.*;
+  
+  public class AddressRetriever {
+     public Address retrieve(double latitude, double longitude)
+           throws IOException, ParseException {
+        String parms = String.format("lat=%.6flon=%.6f", latitude, longitude);
+       
+        // retrieve() 메서드는 HttpImpl 클래스에 의존하고 있다.
+        String response = new HttpImpl().get(
+          "http://open.mapquestapi.com/nominatim/v1/reverse?format=json&"
+          + parms);
+  
+        JSONObject obj = (JSONObject)new JSONParser().parse(response);
+  
+        JSONObject address = (JSONObject)obj.get("address");
+        String country = (String)address.get("country_code");
+        if (!country.equals("us"))
+           throw new UnsupportedOperationException(
+              "cannot support non-US addresses at this time");
+  
+        String houseNumber = (String)address.get("house_number");
+        String road = (String)address.get("road");
+        String city = (String)address.get("city");
+        String state = (String)address.get("state");
+        String zip = (String)address.get("postcode");
+        return new Address(houseNumber, road, city, state, zip);
+     }
+  }
+  
+  ```
+
+  
+
+  - HttpImpl 클래스는 HTTP 요청을 처리하는 클래스이므로
+
+    - 1. 일반 로직 테스트에 비해 느리다.
+    - 2. API 서버에 의존적이므로 IOException이 발생할 수 있다.
+
+    -  이러한 이유로 프로덕트 코드를 사용하기 보다는 **스텁(stub)**을 사용 한다.
+
+      
+
+  - 스텁이란?
+
+    테스트 용도로 하드 코딩한 값을 반환하는 구현체를 말한다.
+
+    
+
+  - **테스트 코드**
+
+- ```java
+     @Test
+     public void answersAppropriateAddressForValidCoordinates() 
+           throws IOException, ParseException {
+        
+        // 스텁
+        Http http = (String url) ->
+           "{\"address\":{"
+           + "\"house_number\":\"324\","
+           + "\"road\":\"North Tejon Street\","
+           + "\"city\":\"Colorado Springs\","
+           + "\"state\":\"Colorado\","
+           + "\"postcode\":\"80903\","
+           + "\"country_code\":\"us\"}"
+           + "}";
+       
+        // 파라미터 검증을 로직을 추가한 스텁
+        Http httpWithParameterVerification = (String url) -> 
+        {
+          if (!url.contains("lat=38.000000&lon=-104.000000"))
+            fail("url " + url + " does not contain correct parms");
+          return "{\"address\":{"
+             + "\"house_number\":\"324\","
+             + "\"road\":\"North Tejon Street\","
+             + "\"city\":\"Colorado Springs\","
+             + "\"state\":\"Colorado\","
+             + "\"postcode\":\"80903\","
+             + "\"country_code\":\"us\"}"
+             + "}";
+        };
+  
+        // 생성자를 이용한 의존성 주입(DI)
+        // 세터 메서드, 팩토리 메서드, 추상 팩토리도 사용가능 하다.
+        AddressRetriever retriever = new AddressRetriever(http);
+  
+        Address address = retriever.retrieve(38.0,-104.0);
+        
+        assertThat(address.houseNumber, equalTo("324"));
+        assertThat(address.road, equalTo("North Tejon Street"));
+        assertThat(address.city, equalTo("Colorado Springs"));
+        assertThat(address.state, equalTo("Colorado"));
+        assertThat(address.zip, equalTo("80903"));
+     }
+  
+  ```
+
+
+
+- **AddressRetriever 클래스**
+
+```java
+package iloveyouboss;
+
+import java.io.*;
+import org.json.simple.*;
+import org.json.simple.parser.*;
+import util.*;
+
+public class AddressRetriever {
+  
+  // 필드 선언
+  private Http http;
+
+  // 생성자 추가
+   public AddressRetriever(Http http) {
+      this.http = http;
+   }
+
+   public Address retrieve(double latitude, double longitude)
+         throws IOException, ParseException {
+      String parms = String.format("lat=%.6flon=%.6f", latitude, longitude);
+      String response = http.get(
+         "http://open.mapquestapi.com/nominatim/v1/reverse?format=json&"
+         + parms);
+
+      JSONObject obj = (JSONObject)new JSONParser().parse(response);
+      // ...
+
+      JSONObject address = (JSONObject)obj.get("address");
+      String country = (String)address.get("country_code");
+      if (!country.equals("us"))
+         throw new UnsupportedOperationException(
+               "cannot support non-US addresses at this time");
+
+      String houseNumber = (String)address.get("house_number");
+      String road = (String)address.get("road");
+      String city = (String)address.get("city");
+      String state = (String)address.get("state");
+      String zip = (String)address.get("postcode");
+      return new Address(houseNumber, road, city, state, zip);
+   }
+}
+```
+
+
+
+- 스텁을 이용하여 테스트를 작성하는 것도 방법이지만 
+  좀 더 편하고 빠르게 테스트를 작성할 수 있도록 mockito 프레임워크의 mock 을 사용해보자.
+
+  ```java
+  @Test
+  public void answersAppropriateAddressForValidCoordinates() 
+        throws IOException, ParseException {
+     
+     // Http 타입을 구현하는 mock 을 생성한다.
+     Http http = mock(Http.class);
+     // stubbing
+     when(http.get(contains("lat=38.000000&lon=-104.000000"))).thenReturn(
+           "{\"address\":{"
+           + "\"house_number\":\"324\","
+          // ...
+           + "\"road\":\"North Tejon Street\","
+           + "\"city\":\"Colorado Springs\","
+           + "\"state\":\"Colorado\","
+           + "\"postcode\":\"80903\","
+           + "\"country_code\":\"us\"}"
+           + "}");
+  
+     AddressRetriever retriever = new AddressRetriever(http);
+  
+     Address address = retriever.retrieve(38.0,-104.0);
+     
+     assertThat(address.houseNumber, equalTo("324"));
+     // ...
+     assertThat(address.road, equalTo("North Tejon Street"));
+     assertThat(address.city, equalTo("Colorado Springs"));
+     assertThat(address.state, equalTo("Colorado"));
+     assertThat(address.zip, equalTo("80903"));
+  }
+  ```
+
+
+
+- mockito프레임워크를 이용하여 stubbing한 코드와 
+  프레임워크를 사용하지 않은 stub의 코드를 비교해보자.
+
+  
+
+  ```java
+        // stubbing(mockito 사용)
+        when(http.get(contains("lat=38.000000&lon=-104.000000"))).thenReturn(
+           "{\"address\":{"
+           + "\"house_number\":\"324\","
+          // ...
+           + "\"road\":\"North Tejon Street\","
+           + "\"city\":\"Colorado Springs\","
+           + "\"state\":\"Colorado\","
+           + "\"postcode\":\"80903\","
+           + "\"country_code\":\"us\"}"
+           + "}");
+  
+       // 파라미터 검증을 로직을 추가한 스텁(mockito 사용x)
+        Http httpWithParameterVerification = (String url) -> 
+        {
+          if (!url.contains("lat=38.000000&lon=-104.000000"))
+            fail("url " + url + " does not contain correct parms");
+          return "{\"address\":{"
+             + "\"house_number\":\"324\","
+             + "\"road\":\"North Tejon Street\","
+             + "\"city\":\"Colorado Springs\","
+             + "\"state\":\"Colorado\","
+             + "\"postcode\":\"80903\","
+             + "\"country_code\":\"us\"}"
+             + "}";
+        };
+  
+  ```
+
+
+
+- 나의 경우 mockito 프레임워크로 코드를 작성한 것이 더 나아보이는 점을 딱히 찾지 못했다
+
+  어노테이션을 사용하기 전까지는.
+
+
+
+```java
+public class AddressRetrieverTest {
+
+   @Mock
+   private Http http; // Http http = mock(Http.class);와 동일한 코드
+
+   // 목 객체를 주입하는 과정
+   // 1. 생성자를 탐색
+   // 2. 세터 메서드를 탐색
+   // 3. 적절한 필드를 탐색(필드 타입과 매칭되는 것)
+   // 기존 AddressRetriever 클래스의 생성자로 Http 객체를 넘겨주는 코드를 삭제하더라도
+   // AddressRetriever 클래스에 Http 타입을 필드로 선언하기만 한다면
+   // 3. 적절한 필드를 탐색하는 과정으로 mock 객체를 주입 할 수 있고
+   // 프로덕션 코드와 mock을 이용하는 테스트 코드를 분리할 수 있다.
+   @InjectMocks
+   private AddressRetriever retriever; // mock을 주입할 대상
+   
+   @Before
+   public void createRetriever() {
+      retriever = new AddressRetriever();
+      MockitoAnnotations.initMocks(this);
+   }
+
+   @Test
+   public void answersAppropriateAddressForValidCoordinates() 
+         throws IOException, ParseException {
+      when(http.get(contains("lat=38.000000&lon=-104.000000")))
+         .thenReturn("{\"address\":{"
+                        + "\"house_number\":\"324\","
+         // ...
+                        + "\"road\":\"North Tejon Street\","
+                        + "\"city\":\"Colorado Springs\","
+                        + "\"state\":\"Colorado\","
+                        + "\"postcode\":\"80903\","
+                        + "\"country_code\":\"us\"}"
+                        + "}");
+
+      Address address = retriever.retrieve(38.0,-104.0);
+      
+      assertThat(address.houseNumber, equalTo("324"));
+      assertThat(address.road, equalTo("North Tejon Street"));
+      assertThat(address.city, equalTo("Colorado Springs"));
+      assertThat(address.state, equalTo("Colorado"));
+      assertThat(address.zip, equalTo("80903"));
+   }
+}
+```
+
+
+
+```java
+package iloveyouboss;
+
+import java.io.*;
+import org.json.simple.*;
+import org.json.simple.parser.*;
+import util.*;
+
+public class AddressRetriever {
+  
+   // 생성자 제거하고 필드로 선언한다.
+   private Http http = new HttpImpl();
+
+   public Address retrieve(double latitude, double longitude)
+         throws IOException, ParseException {
+      String parms = String.format("lat=%.6f&lon=%.6f", latitude, longitude);
+      String response = http.get(
+         "http://open.mapquestapi.com/nominatim/v1/reverse?format=json&"
+         + parms);
+
+      JSONObject obj = (JSONObject)new JSONParser().parse(response);
+      // ...
+
+      JSONObject address = (JSONObject)obj.get("address");
+      String country = (String)address.get("country_code");
+      if (!country.equals("us"))
+         throw new UnsupportedOperationException(
+               "cannot support non-US addresses at this time");
+
+      String houseNumber = (String)address.get("house_number");
+      String road = (String)address.get("road");
+      String city = (String)address.get("city");
+      String state = (String)address.get("state");
+      String zip = (String)address.get("postcode");
+      return new Address(houseNumber, road, city, state, zip);
+   }
+}
+```
+
+
+
+- 목이 프로덕션 코드의 동작을 실행하는 지 확인 하는 방법
+
+  - AddressRetriever 클래스의 프로덕션 코드는 HttpImpl.get() 메서드를 호출한다.
+
+    1. 실제 통신이 이루어질 것이므로 실행시간을 측정하여 비교해보거나
+
+    2.  HttpImpl.get() 메서드에 예외를 발생시켰을 때 테스트 코드에서 예외가 보인다면 
+        프로덕션 코드가 동작하고 있는 것임을 알 수 있다.
